@@ -12,106 +12,73 @@ Developed by the [**FAIR Data Innovations Hub**](https://fairdataihub.org/) at t
 
 ## Overview
 
-This repository contains everything needed to reproduce the PosterSentry classifier from scratch:
+This repository contains the data and the as-run code behind the released PosterSentry classifier:
 
-- **Training data**: 3,606 balanced text samples (1,803 poster + 1,803 non-poster) extracted from real PDFs
-- **Training script**: Multimodal feature extraction + logistic regression training
-- **Corpus classification script**: Batch classify large PDF corpora with parallel processing
+- **Training data**: 3,381 documents with human-validated labels (1,686 poster, 1,695 non-poster)
+- **Training script**: label construction from the survey and adjudication, multimodal feature extraction, and logistic regression training
+- **Corpus classification script**: batch classification of the full 30,205-document corpus with the trained head
+
+Release 1.0.0 supersedes the earlier heuristic-label release, which remains available in the repository history.
 
 ## Training Data
 
-### Source
+### Source and labeling
 
-The training data comes from **real scientific documents** — zero synthetic data:
+The training data comes from **real scientific documents** with **human-validated labels**, zero synthetic data. Three reviewers independently classified all 3,570 candidate documents at [survey.posters.science](https://survey.posters.science) (inter-rater Krippendorff's alpha 0.79), and the 439 documents without a unanimous panel were settled in a blinded adjudication review. After removing 182 near-duplicates and 7 documents with unavailable PDFs, the remaining 3,381 form the training corpus:
 
-| Class | Count | Source |
-|-------|-------|--------|
-| **Poster** | 1,803 | Verified scientific posters from Zenodo and Figshare |
-| **Non-poster** | 1,803 | Manually confirmed non-posters (papers, proceedings, newsletters, abstract books) |
+| Class | Count | Label provenance |
+|-------|-------|------------------|
+| **Poster** | 1,686 | Unanimous panel label or blinded adjudication |
+| **Non-poster** | 1,695 | Unanimous panel label or blinded adjudication |
 
-Sampled from a collection of **30,000+ PDFs** scraped from Zenodo and Figshare as part of the posters.science initiative.
+Candidates were drawn from a collection of **30,000+ PDFs** scraped from Zenodo and Figshare as part of the posters.science initiative. When the trained classifier was applied back to that full corpus, it classified 77.2% of repository-labeled "posters" as posters: more than one in five records labeled as posters is something else.
 
 ### Format
 
-`data/poster_sentry_train.ndjson` — newline-delimited JSON with `text` and `label` fields:
+`data/poster_sentry_train.ndjson` is newline-delimited JSON, one row per document:
 
 ```json
-{"text": "TITLE: Effects of Temperature on Enzyme Kinetics\nAUTHORS: A. Smith...", "label": "poster"}
-{"text": "Abstract. We present a novel approach to distributed computing...", "label": "non_poster"}
+{"id": "fxd4ylwf0byrtj307b5k3kpm", "doi": "10.5281/zenodo.1234567", "source": "zenodo", "text": "TITLE: Effects of Temperature on Enzyme Kinetics ...", "label": "poster", "label_source": "unanimous_panel"}
 ```
 
-This is the same dataset published on HuggingFace at [fairdataihub/poster-sentry-training-data](https://huggingface.co/datasets/fairdataihub/poster-sentry-training-data).
+| Field | Description |
+|-------|-------------|
+| `id` | Survey document identifier |
+| `doi` | DOI of the source repository record (present for every row) |
+| `source` | `zenodo` or `figshare` |
+| `text` | First-page text extracted with PyMuPDF, whitespace-normalized, truncated to 4,000 characters |
+| `label` | `poster` or `non_poster` (human-validated) |
+| `label_source` | `unanimous_panel` (2,949 rows) or `adjudicated` (432 rows) |
 
-### Note on Label Quality
-
-The poster class is drawn from repository records self-described as posters by their uploaders. When PosterSentry was later applied to the full 30K corpus, approximately 20% of repository-labeled "posters" were reclassified as non-posters, indicating meaningful label noise in the broader source data.
+This is the same dataset published on HuggingFace at [fairdataihub/poster-sentry-training-data](https://huggingface.co/datasets/fairdataihub/poster-sentry-training-data) (release 1.0.0).
 
 ## Training
 
-### Prerequisites
+`scripts/train_poster_sentry.py` is the as-run training script. It builds the human-validated labels from the survey votes and adjudication decisions, resolves the source PDFs, extracts the 542-dimensional feature vectors (512 text + 15 visual + 15 structural) in parallel, trains the classifier on a stratified 85/15 split at seed 42, and saves the head as a NumPy archive (weights, bias, scaler parameters, label mapping; about 10 KB).
 
-```bash
-pip install poster-sentry[dev] tqdm
-```
+The script requires the local PDF store harvested with poster-repo-scraper, so it documents the training as run rather than serving as a portable tool; the NDJSON data file contains the extracted text for every training document, sufficient for text-only retraining without the PDFs.
 
-You also need access to the source PDF corpus for full multimodal training (text + visual + structural features). The NDJSON data file contains extracted text only — sufficient for text-only retraining.
-
-### Train the Classifier
-
-```bash
-python scripts/train_poster_sentry.py --n-per-class 2000
-```
-
-This will:
-1. Collect poster and non-poster PDFs from the corpus
-2. Extract 542-dimensional feature vectors (512 text + 15 visual + 15 structural)
-3. Balance classes and split 85/15 train/test
-4. StandardScale features and train LogisticRegression
-5. Save the classifier head to `~/.poster_sentry/models/poster_sentry_head.npz`
-
-Training completes in ~40 minutes on CPU (PDF rendering is the bottleneck).
-
-### Arguments
-
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `--n-per-class` | 5000 | Max samples per class |
-| `--test-size` | 0.15 | Test set fraction |
-| `--models-dir` | `~/.poster_sentry/models` | Output directory for model head |
-| `--export-texts` | None | Export extracted texts as NDJSON |
-
-### Expected Results
+### Expected results (held-out split, n = 508)
 
 ```
               precision    recall  f1-score   support
 
-  non_poster     0.8633    0.8856    0.8743       271
-      poster     0.8821    0.8593    0.8705       270
+  non_poster     0.9084    0.8941    0.9012       255
+      poster     0.8949    0.9091    0.9020       253
 
-    accuracy                         0.8725       541
+    accuracy                         0.9016       508
 
 Top features by |coefficient|:
-  size_per_page_kb    coef=+7.6518
-  page_count          coef=-5.4937
-  file_size_kb        coef=-5.4418
+  page_width_pt       coef=+2.65
+  img_width           coef=+2.65
+  edge_density        coef=+2.32
+  color_diversity     coef=+2.14
+  avg_font_size       coef=-1.94
 ```
 
 ## Corpus Classification
 
-Classify a large PDF corpus in batch mode with multiprocessing:
-
-```bash
-python scripts/classify_corpus.py \
-    --input /path/to/pdf/corpus \
-    --output corpus_results/ \
-    --workers 40
-```
-
-Features:
-- Parallel feature extraction with ProcessPoolExecutor (bypasses GIL)
-- Single `fitz.open()` per PDF for maximum throughput
-- Batch text embedding after extraction
-- TSV output + JSON metrics summary
+`scripts/classify_corpus.py` classifies the full corpus with the trained head in resumable batches: parallel feature extraction with multiprocessing, checkpointed part files so an interrupted run resumes where it stopped, batch text embedding, and TSV output with a JSON metrics summary.
 
 ## Feature Architecture
 
@@ -130,8 +97,9 @@ Total: **542 dimensions**, classified by StandardScaler + LogisticRegression.
 | Resource | Description |
 |----------|-------------|
 | [poster-sentry (GitHub)](https://github.com/fairdataihub/poster-sentry) | Installable classifier package |
-| [poster-sentry (HuggingFace)](https://huggingface.co/fairdataihub/poster-sentry) | Model weights |
+| [poster-sentry (HuggingFace)](https://huggingface.co/fairdataihub/poster-sentry) | Model weights (release 1.0.0) |
 | [poster-sentry-training-data (HuggingFace)](https://huggingface.co/datasets/fairdataihub/poster-sentry-training-data) | Dataset on HuggingFace Hub |
+| [poster-sentry-evaluation-paper-code](https://github.com/fairdataihub/poster-sentry-evaluation-paper-code) | Reproducible analysis for the paper |
 | [poster2json](https://github.com/fairdataihub/poster2json) | Poster to structured JSON extraction |
 | [posters.science](https://posters.science) | Platform |
 
@@ -140,8 +108,9 @@ Total: **542 dimensions**, classified by StandardScaler + LogisticRegression.
 ```bibtex
 @dataset{poster_sentry_data_2026,
   title = {PosterSentry Training Data: Scientific Poster Text Corpus},
-  author = {O'Neill, James and Soundarajan, Sanjay and Portillo, Dorian and Patel, Bhavesh},
+  author = {O'Neill, Jamey and Portillo, Dorian and Zeinali, Nahid and Soundarajan, Sanjay and Blake, Gerard and Sarin, Parth and Buttrick, Adam and Patel, Bhavesh},
   year = {2026},
+  version = {1.0.0},
   url = {https://github.com/fairdataihub/poster-sentry-training},
   note = {Part of the posters.science initiative at FAIR Data Innovations Hub}
 }
@@ -155,4 +124,4 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 - [FAIR Data Innovations Hub](https://fairdataihub.org/) at California Medical Innovations Institute (CalMI2)
 - [posters.science](https://posters.science) platform
-- Funded by [The Navigation Fund](https://doi.org/10.71707/rk36-9x79) — "Poster Sharing and Discovery Made Easy"
+- Funded by [The Navigation Fund](https://doi.org/10.71707/rk36-9x79), "Poster Sharing and Discovery Made Easy"
