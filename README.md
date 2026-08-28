@@ -46,7 +46,7 @@ Candidates were drawn from a collection of **30,000+ PDFs** scraped from Zenodo 
 | `id` | Survey document identifier |
 | `doi` | DOI of the source repository record (present for every row) |
 | `source` | `zenodo` or `figshare` |
-| `text` | First-page text extracted with PyMuPDF, whitespace-normalized, truncated to 4,000 characters |
+| `text` | First-page text extracted with pdfplumber, whitespace-normalized, truncated to 4,000 characters |
 | `label` | `poster` or `non_poster` (human-validated) |
 | `label_source` | `unanimous_panel` (2,949 rows) or `adjudicated` (432 rows) |
 
@@ -63,17 +63,17 @@ The script requires the local PDF store harvested with poster-repo-scraper, so i
 ```
               precision    recall  f1-score   support
 
-  non_poster     0.9084    0.8941    0.9012       255
-      poster     0.8949    0.9091    0.9020       253
+  non_poster     0.897     0.886     0.892       255
+      poster     0.887     0.897     0.892       253
 
-    accuracy                         0.9016       508
+    accuracy                         0.8917      508
 
 Top features by |coefficient|:
-  page_width_pt       coef=+2.65
-  img_width           coef=+2.65
-  edge_density        coef=+2.32
-  color_diversity     coef=+2.14
-  avg_font_size       coef=-1.94
+  line_count          coef=+2.80
+  edge_density        coef=+2.61
+  page_width_pt       coef=+2.22
+  img_width           coef=+2.16
+  size_per_page_kb    coef=+1.82
 ```
 
 ## Corpus Classification

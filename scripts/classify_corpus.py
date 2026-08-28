@@ -25,14 +25,15 @@ print(f"corpus rows: {len(items)}", flush=True)
 
 def work(item):
     fn, source, path = item
-    import fitz, re as _re
+    import re as _re
+    import pdfplumber
     from poster_sentry.features import VisualFeatureExtractor as V, PDFStructuralExtractor as S
     v = V(); s = S()
     try:
-        doc = fitz.open(path)
-        if len(doc) == 0:
-            doc.close(); return (fn, source, None, None, None)
-        text = doc[0].get_text(); doc.close()
+        with pdfplumber.open(path) as _pp:
+            if len(_pp.pages) == 0:
+                return (fn, source, None, None, None)
+            text = _pp.pages[0].extract_text() or ""
         text = _re.sub(r"\s+", " ", text).strip()[:4000]
         img = v.pdf_to_image(path)
         vf = v.extract(img) if img is not None else {n: 0.0 for n in v.FEATURE_NAMES}
