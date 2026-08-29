@@ -31,7 +31,7 @@ The training data comes from **real scientific documents** with **human-validate
 | **Poster** | 1,686 | Unanimous panel label or blinded adjudication |
 | **Non-poster** | 1,695 | Unanimous panel label or blinded adjudication |
 
-Candidates were drawn from a collection of **30,000+ PDFs** scraped from Zenodo and Figshare as part of the posters.science initiative. When the trained classifier was applied back to that full corpus, it classified 77.2% of repository-labeled "posters" as posters: more than one in five records labeled as posters is something else.
+Candidates were drawn from a collection of **30,000+ PDFs** scraped from Zenodo and Figshare as part of the posters.science initiative. When the trained classifier was applied back to that full corpus, it classified 76.4% of repository-labeled "posters" as posters: more than one in five records labeled as posters is something else.
 
 ### Format
 
