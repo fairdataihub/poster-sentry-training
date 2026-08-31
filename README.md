@@ -76,6 +76,22 @@ Top features by |coefficient|:
   size_per_page_kb    coef=+1.82
 ```
 
+## PDF backend
+
+Feature extraction uses a selectable backend, defaulting to `pdfplumber`
+(pdfplumber for text and structure, pypdfium2 for rendering) — the permissively
+licensed stack the released model is trained on. To retrain with the faster but
+AGPL-licensed PyMuPDF backend instead, install it and set the environment
+variable; no code change is needed:
+
+```bash
+pip install poster-sentry[pymupdf]
+POSTER_SENTRY_BACKEND=pymupdf python scripts/train_poster_sentry.py --n-per-class 2000
+```
+
+The backends extract slightly different features, so a model trained with one
+backend should be used for inference with the same backend.
+
 ## Corpus Classification
 
 `scripts/classify_corpus.py` classifies the full corpus with the trained head in resumable batches: parallel feature extraction with multiprocessing, checkpointed part files so an interrupted run resumes where it stopped, batch text embedding, and TSV output with a JSON metrics summary.
