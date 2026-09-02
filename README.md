@@ -69,9 +69,9 @@ The script requires the local PDF store harvested with poster-repo-scraper, so i
     accuracy                         0.9291      508
 
 Top stage-2 features by |coefficient|:
-  page_count          coef=-3.86
+  page_count          coef=-3.87
   size_per_page_kb    coef=+2.49
-  line_count          coef=+2.02
+  line_count          coef=+2.00
   file_size_kb        coef=-1.74
   mean_g              coef=+1.30
 ```
