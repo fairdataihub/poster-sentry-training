@@ -118,73 +118,74 @@ X = np.concatenate([emb, np.array([r[2] for r in dedup], dtype="float32"),
                     np.array([r[3] for r in dedup], dtype="float32")], axis=1)
 print(f"feature matrix: {X.shape}")
 
-# ---------- 5. split, scale, train ----------
-from sklearn.model_selection import train_test_split
+# ---------- 5. split, scale, train (stacked) ----------
+from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, accuracy_score
 
+X = X.astype("float64")
+Xt, Xe = X[:, :512], X[:, 512:]
+LRM = lambda: LogisticRegression(C=1.0, max_iter=1000, class_weight="balanced",
+                                 solver="lbfgs", n_jobs=1, random_state=SEED)
+
+# Stacked architecture: stage 1 scores the 512-d text embedding alone; its
+# poster probability becomes the single text_score feature of stage 2, which
+# classifies [text_score + 15 visual + 15 structural] = 31 features. Stage 2
+# trains on inner 5-fold out-of-fold text scores so it never sees an
+# in-sample-optimistic text score (leak-free stacking).
+def text_oof_scores(T, yy):
+    out = np.zeros(len(yy))
+    for trn, val in StratifiedKFold(5, shuffle=True, random_state=SEED).split(T, yy):
+        s = StandardScaler().fit(T[trn]); c = LRM(); c.fit(s.transform(T[trn]), yy[trn])
+        out[val] = c.predict_proba(s.transform(T[val]))[:, 1]
+    return out
+
 idx = np.arange(len(y))
 tr, te = train_test_split(idx, test_size=0.15, stratify=y, random_state=SEED)
-scaler = StandardScaler().fit(X[tr])
-Xtr, Xte = scaler.transform(X[tr]), scaler.transform(X[te])
 print(f"train {len(tr)} | test {len(te)} (test balance: poster={int(y[te].sum())}, non={int((1-y[te]).sum())})")
 
-def fit_eval(Xtr_, ytr_, tag):
-    clf = LogisticRegression(C=1.0, max_iter=1000, class_weight="balanced",
-                             solver="lbfgs", n_jobs=1, random_state=SEED)
-    clf.fit(Xtr_, ytr_)
-    pred = clf.predict(Xte)
-    print(f"\n===== {tag} =====")
-    print(classification_report(y[te], pred, target_names=["non_poster", "poster"], digits=4))
-    return clf, accuracy_score(y[te], pred)
+s1 = StandardScaler().fit(Xt[tr]); c1 = LRM(); c1.fit(s1.transform(Xt[tr]), y[tr])
+ts_tr = text_oof_scores(Xt[tr], y[tr])
+S_tr = np.column_stack([ts_tr, Xe[tr]])
+s2 = StandardScaler().fit(S_tr); c2 = LRM(); c2.fit(s2.transform(S_tr), y[tr])
 
-# primary: all human-validated data, balanced class weights
-clf, acc_full = fit_eval(Xtr, y[tr], "PRIMARY: full corpus + balanced class weights")
+ts_te = c1.predict_proba(s1.transform(Xt[te]))[:, 1]
+S_te = np.column_stack([ts_te, Xe[te]])
+pred = c2.predict(s2.transform(S_te))
+print(classification_report(y[te], pred, target_names=["non_poster", "poster"], digits=4))
+acc = accuracy_score(y[te], pred)
 
-# variant: balanced downsampling (original recipe)
-pos = np.where(y[tr] == 1)[0]; neg = np.where(y[tr] == 0)[0]
-m = min(len(pos), len(neg))
-rng = np.random.default_rng(SEED)
-keep = np.concatenate([rng.choice(pos, m, replace=False), rng.choice(neg, m, replace=False)])
-_, acc_ds = fit_eval(Xtr[keep], y[tr][keep], f"VARIANT: balanced downsample ({m}/class)")
-
-# ---------- 6. old released head on the same held-out set ----------
-old = np.load("/home/joneill/Nextcloud/vaults/jmind/calmi2/poster-sentry/models/poster_sentry_head.npz", allow_pickle=True)
-oW, ob = old["W"], old["b"]
-om, os_ = old["scaler_mean"], old["scaler_scale"]
-lab = list(old["labels"]); ip = lab.index("poster")
-Xte_old = (X[te] - om) / os_
-logits = Xte_old @ oW + ob
-old_pred = (logits[:, ip] > logits[:, 1 - ip]).astype(int)
-print("\n===== OLD released head on the same held-out set =====")
-print(classification_report(y[te], old_pred, target_names=["non_poster", "poster"], digits=4))
-acc_old = accuracy_score(y[te], old_pred)
-
-# ---------- 7. top features + save ----------
-names = ([f"emb_{i}" for i in range(512)] + list(VisualFeatureExtractor.FEATURE_NAMES)
-         + list(PDFStructuralExtractor.FEATURE_NAMES))
-coef = clf.coef_[0]
+# ---------- 6. top features + save ----------
+names31 = (["text_score"] + list(VisualFeatureExtractor.FEATURE_NAMES)
+           + list(PDFStructuralExtractor.FEATURE_NAMES))
+coef = c2.coef_[0]
 top = np.argsort(np.abs(coef))[-15:][::-1]
-print("\nTop 15 features (new PosterSentry):")
-for i in top: print(f"  {names[i]:24s} {coef[i]:+.3f}")
+print("\nTop 15 stage-2 features:")
+for i in top: print(f"  {names31[i]:24s} {coef[i]:+.3f}")
 
-W = np.vstack([-clf.coef_[0], clf.coef_[0]]).T.astype("float32")
-b = np.array([-clf.intercept_[0], clf.intercept_[0]], dtype="float32")
-np.savez(OUT / "poster_sentry_head.npz", W=W, b=b, labels=np.array(["non_poster", "poster"]),
-         scaler_mean=scaler.mean_.astype("float32"), scaler_scale=scaler.scale_.astype("float32"))
-np.savez(OUT / "features_cache.npz", X=X, y=y, ids=np.array(ids))
+# Zero first column so that softmax over the two columns reproduces sklearn's
+# sigmoid exactly (a [-c, +c] convention would double the logit and sharpen
+# probabilities; harmless for a 0.5 decision, wrong for a stacked feature).
+def two_col(clf):
+    W = np.vstack([np.zeros_like(clf.coef_[0]), clf.coef_[0]]).T.astype("float64")
+    b = np.array([0.0, clf.intercept_[0]], dtype="float64")
+    return W, b
+W1, b1 = two_col(c1); W2, b2 = two_col(c2)
+np.savez(OUT / "poster_sentry_head.npz", arch=np.array("stacked"),
+         labels=np.array(["non_poster", "poster"]),
+         W=W2, b=b2, scaler_mean=s2.mean_, scaler_scale=s2.scale_,
+         s1_W=W1, s1_b=b1, s1_scaler_mean=s1.mean_, s1_scaler_scale=s1.scale_)
+np.savez(OUT / "features_cache.npz", X=X.astype("float32"), y=y, ids=np.array(ids))
 json.dump({
-    "date": "2026-08-16", "seed": SEED,
+    "date": "2026-09-01", "seed": SEED, "arch": "stacked",
     "labels_total": len(labels), "unanimous": n_unan, "adjudicated": len(adj),
     "class_balance": dict(bal), "paths_resolved": len(paths), "extract_failures": len(paths) - len(results),
     "short_text_dropped": short, "near_duplicates_removed": dropped,
     "final_corpus": len(dedup), "final_poster": int(y.sum()), "final_non_poster": int((1 - y).sum()),
     "train": len(tr), "test": len(te),
-    "test_accuracy_full_balancedweights": acc_full,
-    "test_accuracy_downsampled": acc_ds,
-    "test_accuracy_old_released_head": acc_old,
-    "top15": [[names[i], float(coef[i])] for i in top],
+    "test_accuracy": acc,
+    "top15_stage2": [[names31[i], float(coef[i])] for i in top],
 }, open(OUT / "metrics.json", "w"), indent=1)
 print(f"\nSaved head + features + metrics to {OUT}")
-print(f"SUMMARY: new(full)={acc_full:.4f}  new(downsampled)={acc_ds:.4f}  old-head={acc_old:.4f}")
+print(f"SUMMARY: held-out={acc:.4f}")

@@ -15,7 +15,7 @@ Developed by the [**FAIR Data Innovations Hub**](https://fairdataihub.org/) at t
 This repository contains the data and the as-run code behind the released PosterSentry classifier:
 
 - **Training data**: 3,381 documents with human-validated labels (1,686 poster, 1,695 non-poster)
-- **Training script**: label construction from the survey and adjudication, multimodal feature extraction, and logistic regression training
+- **Training script**: label construction from the survey and adjudication, multimodal feature extraction, and two-stage (stacked) logistic regression training
 - **Corpus classification script**: batch classification of the full 30,205-document corpus with the trained head
 
 Release 1.0.0 supersedes the earlier heuristic-label release, which remains available in the repository history.
@@ -31,7 +31,7 @@ The training data comes from **real scientific documents** with **human-validate
 | **Poster** | 1,686 | Unanimous panel label or blinded adjudication |
 | **Non-poster** | 1,695 | Unanimous panel label or blinded adjudication |
 
-Candidates were drawn from a collection of **30,000+ PDFs** scraped from Zenodo and Figshare as part of the posters.science initiative. When the trained classifier was applied back to that full corpus, it classified 76.4% of repository-labeled "posters" as posters: more than one in five records labeled as posters is something else.
+Candidates were drawn from a collection of **30,000+ PDFs** scraped from Zenodo and Figshare as part of the posters.science initiative. When the trained classifier was applied back to that full corpus, it classified 80.6% of repository-labeled "posters" as posters: roughly one in five records labeled as posters is something else.
 
 ### Format
 
@@ -54,7 +54,7 @@ This is the same dataset published on HuggingFace at [fairdataihub/poster-sentry
 
 ## Training
 
-`scripts/train_poster_sentry.py` is the as-run training script. It builds the human-validated labels from the survey votes and adjudication decisions, resolves the source PDFs, extracts the 542-dimensional feature vectors (512 text + 15 visual + 15 structural) in parallel, trains the classifier on a stratified 85/15 split at seed 42, and saves the head as a NumPy archive (weights, bias, scaler parameters, label mapping; about 10 KB).
+`scripts/train_poster_sentry.py` is the as-run training script. It builds the human-validated labels from the survey votes and adjudication decisions, resolves the source PDFs, extracts the feature channels (512-d text embedding + 15 visual + 15 structural) in parallel, trains the two-stage classifier on a stratified 85/15 split at seed 42 (stage 1 scores the text embedding; its inner 5-fold out-of-fold poster probability becomes the text_score feature of the 31-feature final classifier), and saves the head as a NumPy archive (both stages' weights, biases, and scaler parameters plus the label mapping; about 20 KB).
 
 The script requires the local PDF store harvested with poster-repo-scraper, so it documents the training as run rather than serving as a portable tool; the NDJSON data file contains the extracted text for every training document, sufficient for text-only retraining without the PDFs.
 
@@ -63,17 +63,17 @@ The script requires the local PDF store harvested with poster-repo-scraper, so i
 ```
               precision    recall  f1-score   support
 
-  non_poster     0.897     0.886     0.892       255
-      poster     0.887     0.897     0.892       253
+  non_poster     0.926     0.933     0.930       255
+      poster     0.932     0.925     0.929       253
 
-    accuracy                         0.8917      508
+    accuracy                         0.9291      508
 
-Top features by |coefficient|:
-  line_count          coef=+2.80
-  edge_density        coef=+2.61
-  page_width_pt       coef=+2.22
-  img_width           coef=+2.16
-  size_per_page_kb    coef=+1.82
+Top stage-2 features by |coefficient|:
+  page_count          coef=-3.86
+  size_per_page_kb    coef=+2.49
+  line_count          coef=+2.02
+  file_size_kb        coef=-1.74
+  mean_g              coef=+1.30
 ```
 
 ## PDF backend
@@ -106,7 +106,7 @@ PosterSentry extracts three feature channels per PDF:
 | **Visual** | 15 | Color stats (RGB mean/std), edge density, FFT spatial complexity, whitespace ratio, color diversity |
 | **Structural** | 15 | Page count/dimensions, text block count, font count/size/variance, title score, text density, file size |
 
-Total: **542 dimensions**, classified by StandardScaler + LogisticRegression.
+Stage 1 (StandardScaler + LogisticRegression) summarizes the 512-d text embedding into a single text score; the final classifier is a second StandardScaler + LogisticRegression over **31 features** (text score + 15 visual + 15 structural).
 
 ## Related Resources
 
