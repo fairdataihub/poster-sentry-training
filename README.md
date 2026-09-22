@@ -14,7 +14,7 @@ Developed by the [**FAIR Data Innovations Hub**](https://fairdataihub.org/) at t
 
 This repository contains the data and the as-run code behind the released PosterSentry classifier:
 
-- **Training data**: 3,381 documents with human-validated labels (1,686 poster, 1,695 non-poster)
+- **Training data**: 3,298 documents with human-validated labels (1,651 poster, 1,647 non-poster)
 - **Training script**: label construction from the survey and adjudication, multimodal feature extraction, and two-stage (stacked) logistic regression training
 - **Corpus classification script**: batch classification of the full 30,205-document corpus with the trained head
 
@@ -24,14 +24,14 @@ Release 1.0.0 supersedes the earlier heuristic-label release, which remains avai
 
 ### Source and labeling
 
-The training data comes from **real scientific documents** with **human-validated labels**, zero synthetic data. Three reviewers independently classified all 3,570 candidate documents at [survey.posters.science](https://survey.posters.science) (inter-rater Krippendorff's alpha 0.79), and the 439 documents without a unanimous panel were settled in a blinded adjudication review. After removing 182 near-duplicates and 7 documents with unavailable PDFs, the remaining 3,381 form the training corpus:
+The training data comes from **real scientific documents** with **human-validated labels**, zero synthetic data. Three reviewers independently classified 3,486 candidate documents that passed license screening at [survey.posters.science](https://survey.posters.science) (inter-rater Krippendorff's alpha 0.79), and the 430 documents without a unanimous panel were settled in a blinded adjudication review. After removing 181 near-duplicates and 7 documents with unavailable PDFs, the remaining 3,298 form the training corpus:
 
 | Class | Count | Label provenance |
 |-------|-------|------------------|
-| **Poster** | 1,686 | Unanimous panel label or blinded adjudication |
-| **Non-poster** | 1,695 | Unanimous panel label or blinded adjudication |
+| **Poster** | 1,651 | Unanimous panel label or blinded adjudication |
+| **Non-poster** | 1,647 | Unanimous panel label or blinded adjudication |
 
-Candidates were drawn from a collection of **30,000+ PDFs** scraped from Zenodo and Figshare as part of the posters.science initiative. When the trained classifier was applied back to that full corpus, it classified 80.6% of repository-labeled "posters" as posters: roughly one in five records labeled as posters is something else.
+Candidates were drawn from a collection of **30,000+ PDFs** scraped from Zenodo and Figshare as part of the posters.science initiative. When the trained classifier was applied back to that full corpus, it classified 80.5% of repository-labeled "posters" as posters: roughly one in five records labeled as posters is something else.
 
 ### Format
 
