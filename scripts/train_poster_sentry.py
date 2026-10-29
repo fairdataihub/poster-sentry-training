@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
-# Train PosterSentry on the human-validated survey corpus:
-# 3,131 unanimously rated documents + 439 adjudicated documents (2026-08-16).
-import csv, json, re, sys, time
+# Train PosterSentry on the human-validated survey corpus: 3,414 documents, each released by
+# its depositor under CC0, CC-BY, or an equivalent permissive license (2,994 rated unanimously,
+# 420 settled in the blinded adjudication). The training corpus is the 3,235 documents listed in
+# data/poster_sentry_train.ndjson, in that order (near-duplicates and documents without a usable
+# PDF were removed beforehand, as recorded in final_labels.csv of the Zenodo record).
+import csv, json, os, re, sys, time
 from collections import Counter, defaultdict
 from pathlib import Path
 import numpy as np
 
-sys.path.insert(0, "/home/joneill/Nextcloud/vaults/jmind/calmi2/poster-sentry")
+sys.path.insert(0, os.environ.get("POSTERSENTRY_PKG", "/home/joneill/Nextcloud/vaults/jmind/calmi2/poster-sentry"))
 SEED = 42
 np.random.seed(SEED)
 
-A = "/home/joneill/pubverse_brett/poster_sentry/paper/analysis/inputs"
-ADJ = "/home/joneill/Downloads/postersentry_adjudication_2026-08-16.csv"
+# survey inputs: the inputs/ folder of poster-sentry-evaluation-paper-code
+A = os.environ.get("POSTERSENTRY_INPUTS", "/home/joneill/wt-postersentry-eval/inputs")
+ADJ = f"{A}/postersentry_adjudication_2026-08-16.csv"
+TRAIN = Path(__file__).resolve().parent.parent / "data" / "poster_sentry_train.ndjson"
 ROOT = Path("/home/joneill/Nextcloud/vaults/jmind/calmi2/poster_science/poster-pdf-meta")
-OUT = Path("/home/joneill/pubverse_brett/poster_sentry/review/retrain_2026-08-16")
+OUT = Path(os.environ.get("POSTERSENTRY_OUT", "/mnt/fast/postersentry/ccby_2026-10-28/training_repo_run"))
 OUT.mkdir(parents=True, exist_ok=True)
 
 PANEL = ["cpc1efk8xl7ogclt0i3zeu3o", "j32isol0qqy827448hqci1dd", "u4v0dvvfdss6i2wfkc7exa12"]
@@ -53,8 +58,13 @@ def resolve(fn):
             return str(p)
     return None
 
+train_rows = [json.loads(l) for l in open(TRAIN)]
+assert all(labels[r["id"]] == r["label"] for r in train_rows), "labels disagree with the released training corpus"
+order = [r["id"] for r in train_rows]
+print(f"training corpus: {len(order)} documents")
+
 paths, missing = {}, []
-for pid in labels:
+for pid in order:
     p = resolve(meta[pid])
     if p: paths[pid] = p
     else: missing.append(meta[pid])
@@ -66,16 +76,12 @@ from poster_sentry.features import VisualFeatureExtractor, PDFStructuralExtracto
 
 def work(item):
     pid, path = item
-    import re as _re
-    import pdfplumber
-    from poster_sentry.features import VisualFeatureExtractor as V, PDFStructuralExtractor as S
+    from poster_sentry.features import VisualFeatureExtractor as V, PDFStructuralExtractor as S, extract_first_page_text
     v = V(); s = S()
     try:
-        with pdfplumber.open(path) as _pp:
-            if len(_pp.pages) == 0:
-                return None
-            text = _pp.pages[0].extract_text() or ""
-        text = _re.sub(r"\s+", " ", text).strip()[:4000]
+        # first-page text from the poster2json layout engine (pdfplumber default when it returns no text),
+        # whitespace-normalized and truncated to 4,000 characters
+        text = extract_first_page_text(path)
         img = v.pdf_to_image(path)
         vf = v.extract(img) if img is not None else {n: 0.0 for n in v.FEATURE_NAMES}
         sf = s.extract(path)
@@ -89,20 +95,11 @@ with Pool(12) as pool:
     results = [r for r in pool.imap_unordered(work, list(paths.items()), chunksize=25) if r is not None]
 print(f"extracted: {len(results)} of {len(paths)} in {time.time()-t0:.0f}s")
 
-# text-length rule identical to the original training pipeline
-kept = [(pid, tx, vv, sv) for pid, tx, vv, sv in results if len(tx) >= 20]
-short = len(results) - len(kept)
-print(f"dropped for <20 chars of text (matches original pipeline): {short}")
-
-# ---------- 4. near-duplicate removal before the split ----------
-def norm(t): return re.sub(r"\W+", "", t.lower())[:300]
-seen, dedup, dropped = set(), [], 0
-for row in kept:
-    k = norm(row[1])
-    if k in seen:
-        dropped += 1; continue
-    seen.add(k); dedup.append(row)
-print(f"near-duplicates removed before split: {dropped} | final corpus: {len(dedup)}")
+# ---------- 4. rows in the released training order (the seed-42 split depends on it) ----------
+got = {r[0]: r for r in results}
+assert len(got) == len(order), f"feature extraction failed for {len(order) - len(got)} documents"
+dedup = [got[pid] for pid in order]
+short, dropped = 0, 0
 
 ids = [r[0] for r in dedup]
 texts = [r[1] for r in dedup]
@@ -172,13 +169,19 @@ def two_col(clf):
     b = np.array([0.0, clf.intercept_[0]], dtype="float64")
     return W, b
 W1, b1 = two_col(c1); W2, b2 = two_col(c2)
+# The released head is the same recipe refit on the full corpus.
+s1 = StandardScaler().fit(Xt); c1 = LRM(); c1.fit(s1.transform(Xt), y)
+S_all = np.column_stack([text_oof_scores(Xt, y), Xe])
+s2 = StandardScaler().fit(S_all); c2 = LRM(); c2.fit(s2.transform(S_all), y)
+W1, b1 = two_col(c1); W2, b2 = two_col(c2)
+coef = c2.coef_[0]; top = np.argsort(np.abs(coef))[-15:][::-1]
 np.savez(OUT / "poster_sentry_head.npz", arch=np.array("stacked"),
          labels=np.array(["non_poster", "poster"]),
          W=W2, b=b2, scaler_mean=s2.mean_, scaler_scale=s2.scale_,
          s1_W=W1, s1_b=b1, s1_scaler_mean=s1.mean_, s1_scaler_scale=s1.scale_)
 np.savez(OUT / "features_cache.npz", X=X.astype("float32"), y=y, ids=np.array(ids))
 json.dump({
-    "date": "2026-09-01", "seed": SEED, "arch": "stacked",
+    "date": "2026-10-28", "seed": SEED, "arch": "stacked",
     "labels_total": len(labels), "unanimous": n_unan, "adjudicated": len(adj),
     "class_balance": dict(bal), "paths_resolved": len(paths), "extract_failures": len(paths) - len(results),
     "short_text_dropped": short, "near_duplicates_removed": dropped,
